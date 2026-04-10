@@ -1,6 +1,6 @@
 module github.com/mochi-mqtt/server/v2
 
-go 1.21
+go 1.26.2
 
 require (
 	github.com/alicebob/miniredis/v2 v2.23.0
@@ -9,9 +9,11 @@ require (
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/gorilla/websocket v1.5.0
 	github.com/jinzhu/copier v0.3.5
+	github.com/meshtastic/go/generated v0.0.0
 	github.com/rs/xid v1.4.0
 	github.com/stretchr/testify v1.8.1
 	go.etcd.io/bbolt v1.3.5
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -48,9 +50,11 @@ require (
 	github.com/rogpeppe/go-internal v1.9.0 // indirect
 	github.com/yuin/gopher-lua v0.0.0-20210529063254-f4c35e4016d9 // indirect
 	go.opencensus.io v0.22.5 // indirect
+	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/exp v0.0.0-20230626212559-97b1e661b5df // indirect
-	golang.org/x/net v0.33.0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
-	golang.org/x/text v0.21.0 // indirect
-	google.golang.org/protobuf v1.33.0 // indirect
+	golang.org/x/net v0.52.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 )
+
+replace github.com/meshtastic/go/generated => ./gen

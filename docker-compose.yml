@@ -1,0 +1,40 @@
+services:
+  meshtastic-mqtt:
+    build:
+      context: .
+      dockerfile: Dockerfile.meshtastic
+    networks:
+      servers_net:
+        ipv4_address: ${BROKER_IPV4}
+    restart: unless-stopped
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    environment:
+      - BROKER_USERNAME=${BROKER_USERNAME}
+      - BROKER_PASSWORD_HASH=${BROKER_PASSWORD_HASH}
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+    labels:
+      - "com.docker.compose.project=meshtastic"
+      - "com.docker.compose.service=meshtastic-mqtt"
+      - "traefik.enable=true"
+      - "traefik.docker.network=servers_net"
+      - "traefik.instance=${TRAEFIK_INSTANCE}"
+      # TCP router: handles MQTTS (TLS terminated by Traefik → plain 1883)
+      - "traefik.tcp.routers.mqtt.entrypoints=${TRAEFIK_MQTT_ENTRYPOINT}"
+      - "traefik.tcp.routers.mqtt.rule=HostSNI(`*`)"
+      - "traefik.tcp.routers.mqtt.tls=true"
+      - "traefik.tcp.routers.mqtt.tls.certresolver=${TRAEFIK_CERT_RESOLVER}"
+      - "traefik.tcp.routers.mqtt.tls.domains[0].main=${TRAEFIK_DOMAIN}"
+      - "traefik.tcp.routers.mqtt.service=mqtt-backend"
+      - "traefik.tcp.services.mqtt-backend.loadbalancer.server.port=1883"
+      # HTTP router: handles WSS (TLS terminated by Traefik → plain WS on 1884)
+      - "traefik.http.routers.mqtt-ws.entrypoints=websecure"
+      - "traefik.http.routers.mqtt-ws.rule=Host(`${TRAEFIK_DOMAIN}`) && PathPrefix(`/mqtt`)"
+      - "traefik.http.routers.mqtt-ws.tls=true"
+      - "traefik.http.routers.mqtt-ws.tls.certresolver=${TRAEFIK_CERT_RESOLVER}"
+      - "traefik.http.routers.mqtt-ws.service=mqtt-ws-backend"
+      - "traefik.http.services.mqtt-ws-backend.loadbalancer.server.port=1884"
+
+networks:
+  servers_net:
+    external: true

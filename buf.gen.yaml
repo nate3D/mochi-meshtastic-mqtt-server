@@ -1,0 +1,8 @@
+version: v2
+inputs:
+  - module: buf.build/meshtastic/protobufs
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: gen
+    opt:
+      - module=github.com/meshtastic/go/generated

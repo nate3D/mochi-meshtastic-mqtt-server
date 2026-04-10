@@ -1,15 +1,55 @@
-listeners:
-  - type: "tcp"
-    id: "tcp1"
-    address: ":1883"
-  - type: "ws"
-    id: "ws1"
-    address: ":1882"
-  - type: "sysinfo"
-    id: "stats"
-    address: ":1880"
-hooks:
-  auth:
-    allow_all: true
-options:
-  inline_client: true
+# Meshtastic MQTT broker configuration
+# TLS termination is handled upstream by Traefik; no cert_file/key_file needed here.
+
+# Plain TCP listener - receives connections from Traefik (MQTTS 8883 → here).
+tcp_addr: ":1883"
+
+# WebSocket listener - receives connections from Traefik (WSS 443/path → here).
+# Disable by removing or leaving empty.
+ws_addr: ":1884"
+
+# tls_addr, cert_file, key_file are only needed when terminating TLS directly
+# (i.e. not behind a reverse proxy). Leave unset when using Traefik.
+# tls_addr: ":8883"
+# cert_file: "/etc/certs/server.crt"
+# key_file:  "/etc/certs/server.key"
+
+meshtastic:
+  # Credentials are loaded from BROKER_USERNAME / BROKER_PASSWORD_HASH env vars.
+  # You can also list additional static accounts here (e.g. read-only subscribers).
+  # Generate a hash: go run ./cmd/genhash <password>
+  # credentials:
+  #   - username: subscriber
+  #     password_hash: "$2a$12$..."
+
+  channels:
+    # MediumFast default channel: psk_base64 "AQ==" is the single byte [0x01],
+    # which the broker expands to the well-known Meshtastic default AES key.
+    - name: MediumFast
+      psk_base64: AQ==
+
+  rate_limits:
+    # Maximum packets a single node may publish in the window before being dropped.
+    packets_per_window: 100
+    window_secs: 60
+    # How long to cache (From, PacketID) pairs to deduplicate multi-gateway relays.
+    dedup_window_secs: 60
+
+  # Drop packets on a known channel that cannot be decrypted with the configured PSK.
+  # Leave false to forward packets even when decryption fails (e.g. custom channel keys).
+  require_decryptable: false
+
+  # Allow clients to publish to msh/+/2/json/# topics (JSON uplink).
+  # Typically false; JSON paths are receive-only for most deployments.
+  allow_json: false
+
+  # Restrict publishing to specific LoRa regions. Empty = allow all.
+  allowed_regions:
+    - US
+  #   - EU_868
+
+  # Block specific portnums from being forwarded (decimal PortNum values).
+  # blocked_port_nums: []
+
+  # If non-empty, only these portnums will be forwarded (allowlist).
+  # allowed_port_nums: []
