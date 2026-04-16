@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"flag"
@@ -56,6 +57,40 @@ func (w *colorWriter) Write(p []byte) (int, error) {
 		return 0, err
 	}
 	return len(p), nil
+}
+
+// filterHandler wraps a slog.Handler and suppresses known-noisy, benign
+// log records emitted by the upstream mochi-mqtt listener code.
+//
+// Specifically it drops WARN records with an empty message whose sole
+// structured field is error=EOF — these are produced whenever a client
+// disconnects without sending a DISCONNECT packet, which is normal for
+// IoT devices that power-cycle or lose connectivity.
+type filterHandler struct{ slog.Handler }
+
+func (f filterHandler) Handle(ctx context.Context, r slog.Record) error {
+	if r.Level == slog.LevelWarn && r.Message == "" {
+		var isEOF bool
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "error" && strings.Contains(a.Value.String(), "EOF") {
+				isEOF = true
+				return false
+			}
+			return true
+		})
+		if isEOF {
+			return nil
+		}
+	}
+	return f.Handler.Handle(ctx, r)
+}
+
+func (f filterHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return filterHandler{f.Handler.WithAttrs(attrs)}
+}
+
+func (f filterHandler) WithGroup(name string) slog.Handler {
+	return filterHandler{f.Handler.WithGroup(name)}
 }
 
 // serverConfig is the top-level configuration file structure.
@@ -131,7 +166,7 @@ func main() {
 	if useColor {
 		logOut = &colorWriter{out: os.Stdout}
 	}
-	log := slog.New(slog.NewTextHandler(logOut, &slog.HandlerOptions{Level: logLevel}))
+	log := slog.New(filterHandler{slog.NewTextHandler(logOut, &slog.HandlerOptions{Level: logLevel})})
 
 	cfg, err := loadConfig(*configPath, log)
 	if err != nil {

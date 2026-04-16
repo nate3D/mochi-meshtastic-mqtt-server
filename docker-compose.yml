@@ -9,10 +9,8 @@ services:
     restart: unless-stopped
     volumes:
       - ./config.yaml:/app/config.yaml:ro
-    environment:
-      - BROKER_USERNAME
-      - BROKER_PASSWORD_HASH
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+    env_file:
+      - .env
     labels:
       - "com.docker.compose.project=meshtastic"
       - "com.docker.compose.service=meshtastic-mqtt"

@@ -1,4 +1,5 @@
 cmd/mqtt
+meshtastic-mqtt
 .DS_Store
 *.db
 .idea

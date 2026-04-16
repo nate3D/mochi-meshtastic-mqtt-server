@@ -237,6 +237,27 @@ func (h *Hook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, er
 
 	if pt.Type == "json" || pt.Type == "map" {
 		// JSON and map report topics are not ServiceEnvelope protobufs; skip envelope validation.
+		if pt.Type == "map" {
+			// Parse and log the MapReport payload so map reception is visible in logs.
+			var mapReport generated.MapReport
+			if err := proto.Unmarshal(pk.Payload, &mapReport); err != nil {
+				// Non-fatal: proto.Unmarshal rejects string fields containing
+				// non-UTF-8 bytes, which some Meshtastic node names trigger.
+				// The packet is fully intact and will be forwarded normally.
+				h.Log.Debug("map report received (non-UTF-8 node name)",
+					"topic", topic, "bytes", len(pk.Payload))
+			} else {
+				h.Log.Debug("map report received",
+					"topic", topic,
+					"long_name", mapReport.GetLongName(),
+					"firmware", mapReport.GetFirmwareVersion(),
+					"online_nodes", mapReport.GetNumOnlineLocalNodes(),
+					"bytes", len(pk.Payload))
+			}
+			if h.forwarder != nil {
+				h.forwarder.Forward(topic, "", pk.Payload)
+			}
+		}
 		return pk, nil
 	}
 
@@ -272,6 +293,18 @@ func (h *Hook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, er
 		h.Log.Warn("dropped: node exceeded rate limit",
 			"from", from, "topic", topic)
 		return pk, packets.CodeSuccessIgnore
+	}
+
+	// PKI-encrypted packets use asymmetric encryption; they cannot be decrypted
+	// with a channel PSK.  Skip PSK processing entirely and forward as-is so
+	// that recipients with the sender's public key can decrypt them.
+	if meshPkt.GetPkiEncrypted() {
+		h.Log.Debug("pki-encrypted packet: forwarding without PSK decryption",
+			"from", from, "topic", topic, "channel", pt.Channel)
+		if h.forwarder != nil {
+			h.forwarder.Forward(topic, pt.Channel, pk.Payload)
+		}
+		return pk, nil
 	}
 
 	// Channel PSK decryption/validation.

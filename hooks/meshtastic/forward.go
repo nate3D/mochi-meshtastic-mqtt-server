@@ -103,7 +103,9 @@ func newForwarder(cfg UpstreamForwardConfig, log *slog.Logger) *Forwarder {
 // channel is in the list. Errors are logged and do not propagate — the local
 // broker pipeline is never blocked by upstream availability.
 func (f *Forwarder) Forward(topic, channel string, payload []byte) {
-	if len(f.channels) > 0 {
+	// channel is empty for map-type topics, which carry no channel segment.
+	// Always forward those regardless of the channel allowlist.
+	if len(f.channels) > 0 && channel != "" {
 		if _, ok := f.channels[channel]; !ok {
 			return
 		}
@@ -123,6 +125,8 @@ func (f *Forwarder) Forward(topic, channel string, payload []byte) {
 		} else {
 			f.log.Debug("upstream forwarder: forwarded packet", "topic", topic, "bytes", len(payload))
 		}
+	} else {
+		f.log.Warn("upstream forwarder: publish timed out", "topic", topic)
 	}
 }
 
