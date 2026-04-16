@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
+	generated "github.com/meshtastic/go/generated"
 	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/packets"
-	generated "github.com/meshtastic/go/generated"
+	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -23,14 +23,15 @@ const hookID = "meshtastic"
 //	server.AddHook(&meshtastic.Hook{}, &meshtastic.Config{...})
 type Hook struct {
 	mqtt.HookBase
-	config  *Config
-	creds   map[string][]byte // username → bcrypt hash bytes
-	pskMap  map[string][]byte // channel name → expanded PSK bytes
-	dedup   *DedupCache
-	limiter *RateLimiter
-	blocked map[int32]struct{}
-	allowed map[int32]struct{}
-	regions map[string]struct{}
+	config    *Config
+	creds     map[string][]byte // username → bcrypt hash bytes
+	pskMap    map[string][]byte // channel name → expanded PSK bytes
+	dedup     *DedupCache
+	limiter   *RateLimiter
+	blocked   map[int32]struct{}
+	allowed   map[int32]struct{}
+	regions   map[string]struct{}
+	forwarder *Forwarder // nil when upstream forwarding is disabled
 }
 
 // ID returns the unique identifier for this hook.
@@ -105,6 +106,11 @@ func (h *Hook) Init(config any) error {
 		h.regions[r] = struct{}{}
 	}
 
+	// Upstream forwarder.
+	if h.config.UpstreamForward.Enabled {
+		h.forwarder = newForwarder(h.config.UpstreamForward, h.Log)
+	}
+
 	authMode := "open (no credentials set)"
 	if len(h.creds) > 0 {
 		authMode = "password required"
@@ -115,15 +121,19 @@ func (h *Hook) Init(config any) error {
 		"require_decryptable", h.config.RequireDecryptable,
 		"dedup_window_secs", dedupWindow.Seconds(),
 		"rate_limit", h.config.RateLimits.PacketsPerWindow,
+		"upstream_forward", h.config.UpstreamForward.Enabled,
 	)
 
 	return nil
 }
 
-// Stop cleans up the background dedup eviction goroutine.
+// Stop cleans up the background dedup eviction goroutine and closes the upstream connection.
 func (h *Hook) Stop() error {
 	if h.dedup != nil {
 		h.dedup.Stop()
+	}
+	if h.forwarder != nil {
+		h.forwarder.Close()
 	}
 	return nil
 }
@@ -186,7 +196,7 @@ func (h *Hook) OnACLCheck(cl *mqtt.Client, topic string, write bool) bool {
 		return false
 	}
 
-// Enforce region allowlist (compare only the first segment of the root,
+	// Enforce region allowlist (compare only the first segment of the root,
 	// e.g. "US" from "US/memphismesh.com").
 	if len(h.regions) > 0 {
 		regionCode := pt.Root
@@ -275,6 +285,9 @@ func (h *Hook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, er
 				return pk, packets.ErrRejectPacket
 			}
 			// Decryption failed but we're not enforcing it; forward anyway.
+			if h.forwarder != nil {
+				h.forwarder.Forward(topic, pt.Channel, pk.Payload)
+			}
 			return pk, nil
 		}
 
@@ -288,6 +301,10 @@ func (h *Hook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, er
 				return pk, packets.CodeSuccessIgnore
 			}
 		}
+	}
+
+	if h.forwarder != nil {
+		h.forwarder.Forward(topic, pt.Channel, pk.Payload)
 	}
 
 	return pk, nil

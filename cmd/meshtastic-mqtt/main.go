@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/base64"
 	"flag"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -15,6 +17,46 @@ import (
 	"github.com/mochi-mqtt/server/v2/listeners"
 	"gopkg.in/yaml.v3"
 )
+
+// ANSI colour codes used by colorWriter.
+const (
+	ansiGreen  = "\x1b[32m"
+	ansiYellow = "\x1b[33m"
+	ansiRed    = "\x1b[31m"
+	ansiReset  = "\x1b[0m"
+)
+
+// colorWriter wraps an io.Writer and prepends ANSI colour codes to each log
+// line based on the slog level field it contains:
+//
+//	DEBUG / INFO  → green
+//	WARN          → yellow
+//	ERROR         → red
+//
+// slog.TextHandler calls Write exactly once per log record, so each Write
+// call received here is always a complete, newline-terminated line.
+// Disable by setting NO_COLOR=1 or TERM=dumb in the environment.
+type colorWriter struct{ out io.Writer }
+
+func (w *colorWriter) Write(p []byte) (int, error) {
+	color := ansiGreen
+	switch {
+	case bytes.Contains(p, []byte("level=ERROR")):
+		color = ansiRed
+	case bytes.Contains(p, []byte("level=WARN")):
+		color = ansiYellow
+	}
+	line := bytes.TrimRight(p, "\n")
+	out := make([]byte, 0, len(color)+len(line)+len(ansiReset)+1)
+	out = append(out, color...)
+	out = append(out, line...)
+	out = append(out, ansiReset...)
+	out = append(out, '\n')
+	if _, err := w.out.Write(out); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
 
 // serverConfig is the top-level configuration file structure.
 type serverConfig struct {
@@ -35,14 +77,27 @@ type serverConfig struct {
 // meshtasticConfig is the YAML representation of meshhook.Config with
 // base64-encoded PSKs for human-readable config files.
 type meshtasticConfig struct {
-	Credentials        []credentialConfig `yaml:"credentials"`
-	Channels           []channelConfig    `yaml:"channels"`
-	BlockedPortNums    []int32            `yaml:"blocked_port_nums"`
-	AllowedPortNums    []int32            `yaml:"allowed_port_nums"`
+	Credentials        []credentialConfig       `yaml:"credentials"`
+	Channels           []channelConfig          `yaml:"channels"`
+	BlockedPortNums    []int32                  `yaml:"blocked_port_nums"`
+	AllowedPortNums    []int32                  `yaml:"allowed_port_nums"`
 	RateLimits         meshhook.RateLimitConfig `yaml:"rate_limits"`
-	RequireDecryptable bool               `yaml:"require_decryptable"`
-	AllowJSON          bool               `yaml:"allow_json"`
-	AllowedRegions     []string           `yaml:"allowed_regions"`
+	RequireDecryptable bool                     `yaml:"require_decryptable"`
+	AllowJSON          bool                     `yaml:"allow_json"`
+	AllowedRegions     []string                 `yaml:"allowed_regions"`
+	UpstreamForward    upstreamForwardConfig    `yaml:"upstream_forward"`
+}
+
+// upstreamForwardConfig is the YAML representation of meshhook.UpstreamForwardConfig.
+// The password can alternatively be supplied via UPSTREAM_MQTT_PASSWORD env var.
+type upstreamForwardConfig struct {
+	Enabled    bool     `yaml:"enabled"`
+	BrokerAddr string   `yaml:"broker_addr"`
+	Username   string   `yaml:"username"`
+	Password   string   `yaml:"password"`
+	TLS        bool     `yaml:"tls"`
+	ClientID   string   `yaml:"client_id"`
+	Channels   []string `yaml:"channels"`
 }
 
 // credentialConfig is a username + bcrypt password hash from the config file.
@@ -71,7 +126,12 @@ func main() {
 		logLevel = slog.LevelError
 	}
 
-	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
+	useColor := os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb"
+	var logOut io.Writer = os.Stdout
+	if useColor {
+		logOut = &colorWriter{out: os.Stdout}
+	}
+	log := slog.New(slog.NewTextHandler(logOut, &slog.HandlerOptions{Level: logLevel}))
 
 	cfg, err := loadConfig(*configPath, log)
 	if err != nil {
@@ -95,6 +155,20 @@ func main() {
 		RequireDecryptable: cfg.Meshtastic.RequireDecryptable,
 		AllowJSON:          cfg.Meshtastic.AllowJSON,
 		AllowedRegions:     cfg.Meshtastic.AllowedRegions,
+		UpstreamForward: meshhook.UpstreamForwardConfig{
+			Enabled:    cfg.Meshtastic.UpstreamForward.Enabled,
+			BrokerAddr: cfg.Meshtastic.UpstreamForward.BrokerAddr,
+			Username:   cfg.Meshtastic.UpstreamForward.Username,
+			Password:   cfg.Meshtastic.UpstreamForward.Password,
+			TLS:        cfg.Meshtastic.UpstreamForward.TLS,
+			ClientID:   cfg.Meshtastic.UpstreamForward.ClientID,
+			Channels:   cfg.Meshtastic.UpstreamForward.Channels,
+		},
+	}
+
+	// Allow upstream broker password to be supplied via env var to avoid secrets in config.yaml.
+	if pw := strings.TrimSpace(os.Getenv("UPSTREAM_MQTT_PASSWORD")); pw != "" {
+		hookCfg.UpstreamForward.Password = pw
 	}
 
 	for _, c := range cfg.Meshtastic.Credentials {

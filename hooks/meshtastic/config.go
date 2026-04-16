@@ -33,6 +33,28 @@ type RateLimitConfig struct {
 	DedupWindowSecs int `yaml:"dedup_window_secs" json:"dedup_window_secs"`
 }
 
+// UpstreamForwardConfig controls optional forwarding of validated Meshtastic
+// packets to an upstream MQTT broker (e.g. the public mqtt.meshtastic.org server).
+type UpstreamForwardConfig struct {
+	// Enabled activates upstream forwarding. Default: false.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// BrokerAddr is the upstream broker host:port.
+	// Defaults to "mqtt.meshtastic.org:1883" when empty.
+	BrokerAddr string `yaml:"broker_addr" json:"broker_addr"`
+	// Username for the upstream broker (leave empty for anonymous).
+	Username string `yaml:"username" json:"username"`
+	// Password for the upstream broker.
+	Password string `yaml:"password" json:"password"`
+	// TLS enables a TLS connection to the upstream broker (uses port 8883 by convention).
+	TLS bool `yaml:"tls" json:"tls"`
+	// ClientID is the MQTT client ID used when connecting upstream.
+	// Defaults to "mochi-meshtastic-<hostname>" when empty.
+	ClientID string `yaml:"client_id" json:"client_id"`
+	// Channels is an optional allowlist of channel names to forward.
+	// When empty, all channels that pass the local filters are forwarded.
+	Channels []string `yaml:"channels" json:"channels"`
+}
+
 // Config is the configuration for the MeshtasticHook.
 type Config struct {
 	// Credentials is the list of allowed username/bcrypt-password pairs.
@@ -68,4 +90,7 @@ type Config struct {
 	// AllowedRegions restricts publishing to the listed region codes (e.g. "US",
 	// "EU_868"). An empty slice allows all regions.
 	AllowedRegions []string `yaml:"allowed_regions" json:"allowed_regions"`
+
+	// UpstreamForward, when enabled, forwards validated packets to an upstream MQTT broker.
+	UpstreamForward UpstreamForwardConfig `yaml:"upstream_forward" json:"upstream_forward"`
 }

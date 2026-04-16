@@ -53,3 +53,21 @@ meshtastic:
 
   # If non-empty, only these portnums will be forwarded (allowlist).
   # allowed_port_nums: []
+
+  # Upstream forwarding — relay validated packets to the public Meshtastic broker.
+  # Packets are forwarded on the same topic path they arrived on.
+  # See: https://meshtastic.org/docs/software/integrations/mqtt/
+  upstream_forward:
+    enabled: true
+    # Default broker is mqtt.meshtastic.org:1883. Override if needed.
+    broker_addr: "mqtt.meshtastic.org:1883"
+    # Leave username/password empty for anonymous access to the public broker.
+    username: "meshdev"
+    # Alternatively, set UPSTREAM_MQTT_PASSWORD env var to avoid plaintext secrets.
+    password: "large4cats"
+    # Enable TLS (use port 8883 in broker_addr when true).
+    tls: false
+    # MQTT client ID used when connecting upstream. Defaults to mochi-meshtastic-<hostname>.
+    client_id: "memphismesh-broker"
+    # Optional allowlist of channel names to forward. Empty = forward all passing channels.
+    # channels: []
