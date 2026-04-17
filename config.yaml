@@ -14,6 +14,11 @@ ws_addr: ":1884"
 # cert_file: "/etc/certs/server.crt"
 # key_file:  "/etc/certs/server.key"
 
+# HTTP stats endpoint — serves a JSON snapshot at GET /stats.
+# Leave empty (or remove) to disable. Internal/LAN access only; not proxied by Traefik.
+# curl http://localhost:2112/stats
+stats_addr: ":2112"
+
 meshtastic:
   # Credentials are loaded from BROKER_USERNAME / BROKER_PASSWORD_HASH env vars.
   # You can also list additional static accounts here (e.g. read-only subscribers).

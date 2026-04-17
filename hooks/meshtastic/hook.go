@@ -32,6 +32,13 @@ type Hook struct {
 	allowed   map[int32]struct{}
 	regions   map[string]struct{}
 	forwarder *Forwarder // nil when upstream forwarding is disabled
+	stats     *Stats
+}
+
+// Stats returns the live statistics collector for this hook.
+// The caller may call Stats().Snapshot() at any time to read current counters.
+func (h *Hook) Stats() *Stats {
+	return h.stats
 }
 
 // ID returns the unique identifier for this hook.
@@ -44,6 +51,8 @@ func (h *Hook) Provides(b byte) bool {
 	return bytes.Contains([]byte{
 		mqtt.OnConnectAuthenticate,
 		mqtt.OnACLCheck,
+		mqtt.OnConnect,
+		mqtt.OnDisconnect,
 		mqtt.OnPublish,
 	}, []byte{b})
 }
@@ -111,6 +120,9 @@ func (h *Hook) Init(config any) error {
 		h.forwarder = newForwarder(h.config.UpstreamForward, h.Log)
 	}
 
+	// Statistics collector.
+	h.stats = newStats()
+
 	authMode := "open (no credentials set)"
 	if len(h.creds) > 0 {
 		authMode = "password required"
@@ -136,6 +148,18 @@ func (h *Hook) Stop() error {
 		h.forwarder.Close()
 	}
 	return nil
+}
+
+// OnConnect increments the connection counters whenever an MQTT client connects.
+func (h *Hook) OnConnect(cl *mqtt.Client, pk packets.Packet) error {
+	h.stats.TotalConnections.Add(1)
+	h.stats.CurrentConnections.Add(1)
+	return nil
+}
+
+// OnDisconnect decrements the current-connection counter when a client disconnects.
+func (h *Hook) OnDisconnect(cl *mqtt.Client, err error, expire bool) {
+	h.stats.CurrentConnections.Add(-1)
 }
 
 // OnConnectAuthenticate returns true if the connecting client supplies a
@@ -238,6 +262,7 @@ func (h *Hook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, er
 	if pt.Type == "json" || pt.Type == "map" {
 		// JSON and map report topics are not ServiceEnvelope protobufs; skip envelope validation.
 		if pt.Type == "map" {
+			h.stats.MapReportsReceived.Add(1)
 			// Parse and log the MapReport payload so map reception is visible in logs.
 			var mapReport generated.MapReport
 			if err := proto.Unmarshal(pk.Payload, &mapReport); err != nil {
@@ -266,6 +291,7 @@ func (h *Hook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, er
 	if err := proto.Unmarshal(pk.Payload, &env); err != nil {
 		h.Log.Warn("rejected: failed to parse ServiceEnvelope",
 			"client", cl.ID, "topic", topic, "error", err)
+		h.stats.PacketsRejected.Add(1)
 		return pk, packets.ErrRejectPacket
 	}
 
@@ -274,6 +300,7 @@ func (h *Hook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, er
 			"client", cl.ID, "topic", topic,
 			"channel_id", env.GetChannelId(),
 			"gateway_id", env.GetGatewayId())
+		h.stats.PacketsRejected.Add(1)
 		return pk, packets.ErrRejectPacket
 	}
 
@@ -281,10 +308,15 @@ func (h *Hook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, er
 	from := meshPkt.GetFrom()
 	pktID := meshPkt.GetId()
 
+	h.stats.PacketsReceived.Add(1)
+	h.stats.recordNode(from)
+	h.stats.recordGateway(env.GetGatewayId())
+
 	// Deduplication: drop packets seen recently from another gateway.
 	if h.dedup.IsDuplicate(from, pktID) {
 		h.Log.Debug("dropped: duplicate packet",
 			"from", from, "id", pktID, "topic", topic)
+		h.stats.PacketsDeduplicated.Add(1)
 		return pk, packets.CodeSuccessIgnore
 	}
 
@@ -292,6 +324,7 @@ func (h *Hook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, er
 	if !h.limiter.Allow(from) {
 		h.Log.Warn("dropped: node exceeded rate limit",
 			"from", from, "topic", topic)
+		h.stats.PacketsRateLimited.Add(1)
 		return pk, packets.CodeSuccessIgnore
 	}
 
@@ -304,6 +337,7 @@ func (h *Hook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, er
 		if h.forwarder != nil {
 			h.forwarder.Forward(topic, pt.Channel, pk.Payload)
 		}
+		h.stats.PacketsForwarded.Add(1)
 		return pk, nil
 	}
 
@@ -321,6 +355,7 @@ func (h *Hook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, er
 			if h.forwarder != nil {
 				h.forwarder.Forward(topic, pt.Channel, pk.Payload)
 			}
+			h.stats.PacketsForwarded.Add(1)
 			return pk, nil
 		}
 
@@ -331,6 +366,7 @@ func (h *Hook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, er
 				h.Log.Debug("dropped: portnum filtered",
 					"portnum", data.GetPortnum(), "reason", reason,
 					"from", from, "topic", topic)
+				h.stats.PacketsPortnumFiltered.Add(1)
 				return pk, packets.CodeSuccessIgnore
 			}
 		}
@@ -340,6 +376,7 @@ func (h *Hook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packets.Packet, er
 		h.forwarder.Forward(topic, pt.Channel, pk.Payload)
 	}
 
+	h.stats.PacketsForwarded.Add(1)
 	return pk, nil
 }
 

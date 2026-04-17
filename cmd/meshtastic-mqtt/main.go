@@ -5,13 +5,16 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/json"
 	"flag"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
 	meshhook "github.com/mochi-mqtt/server/v2/hooks/meshtastic"
@@ -105,6 +108,9 @@ type serverConfig struct {
 	CertFile string `yaml:"cert_file"`
 	// KeyFile is the path to the PEM TLS private key file.
 	KeyFile string `yaml:"key_file"`
+	// StatsAddr is the address for the HTTP stats endpoint (e.g. ":2112").
+	// Leave empty to disable. The endpoint is served at GET /stats.
+	StatsAddr string `yaml:"stats_addr"`
 	// Meshtastic contains the Meshtastic hook configuration.
 	Meshtastic meshtasticConfig `yaml:"meshtastic"`
 }
@@ -234,9 +240,35 @@ func main() {
 		})
 	}
 
-	if err := server.AddHook(&meshhook.Hook{}, &hookCfg); err != nil {
+	hook := &meshhook.Hook{}
+	if err := server.AddHook(hook, &hookCfg); err != nil {
 		log.Error("failed to add meshtastic hook", "error", err)
 		os.Exit(1)
+	}
+
+	// Optional HTTP stats endpoint.
+	if cfg.StatsAddr != "" {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(hook.Stats().Snapshot())
+		})
+		statsSrv := &http.Server{
+			Addr:         cfg.StatsAddr,
+			Handler:      mux,
+			ReadTimeout:  5 * time.Second,
+			WriteTimeout: 5 * time.Second,
+		}
+		go func() {
+			log.Info("stats endpoint listening", "addr", cfg.StatsAddr)
+			if err := statsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Error("stats server error", "error", err)
+			}
+		}()
 	}
 
 	// Plain TCP listener.
