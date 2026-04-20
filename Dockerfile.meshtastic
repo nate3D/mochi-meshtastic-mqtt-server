@@ -1,4 +1,7 @@
-FROM golang:1.26.2-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.2-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN apk add --no-cache git
 
@@ -11,7 +14,8 @@ RUN go mod download
 
 COPY . ./
 
-RUN go build -o /app/meshtastic-mqtt ./cmd/meshtastic-mqtt
+# Build on the native builder platform and cross-compile for the target platform.
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /app/meshtastic-mqtt ./cmd/meshtastic-mqtt
 
 FROM alpine:3.21
 
